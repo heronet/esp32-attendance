@@ -5,8 +5,8 @@
 #include <WiFiClientSecure.h>
 
 // WiFi credentials
-const char *ssid = "CAMPHIGH";
-const char *password = "samcam69";
+const char *ssid = "Galaxy Note10+ 5G";
+const char *password = "00000000";
 
 // Google Script Deployment ID - you'll need to replace this with your new script ID after deployment
 const char *GScriptId = "AKfycbzM2TnjRPq6UHF2Qlzm-v4np7jexdZ25K-x-Y55XNchhyNG5uLenMjbokRA0C10YIt1Fg";
