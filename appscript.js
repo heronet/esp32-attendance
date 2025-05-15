@@ -35,15 +35,38 @@ function markColumnAttendance(data) {
     const sheetName = data.sheet_name;
     const studentId = data.student_id;
     const studentName = data.student_name;
-    const status = data.status || "present";
 
-    // Generate today's date using Apps Script
-    const today = new Date();
-    const formattedDate = Utilities.formatDate(
-      today,
-      Session.getScriptTimeZone(),
-      "MM/dd/yyyy"
-    );
+    // Instead of status, we'll use the time if provided
+    // If time is not provided, fall back to "present"
+    const attendanceValue = data.time || "present";
+
+    // Use provided date from the ESP32 if available, otherwise use today's date
+    let formattedDate;
+    if (data.date) {
+      // Convert from YYYY-MM-DD to MM/DD/YYYY format for Google Sheets
+      const dateParts = data.date.split("-");
+      if (dateParts.length === 3) {
+        formattedDate = dateParts[1] + "/" + dateParts[2] + "/" + dateParts[0];
+      } else {
+        // If date format is unexpected, use today's date
+        formattedDate = Utilities.formatDate(
+          new Date(),
+          Session.getScriptTimeZone(),
+          "MM/dd/yyyy"
+        );
+      }
+    } else {
+      // If no date provided, use today's date
+      formattedDate = Utilities.formatDate(
+        new Date(),
+        Session.getScriptTimeZone(),
+        "MM/dd/yyyy"
+      );
+    }
+
+    // Log the incoming data and formatted date for debugging
+    Logger.log("Received data: " + JSON.stringify(data));
+    Logger.log("Using formatted date: " + formattedDate);
 
     // Open the spreadsheet and get the sheet
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -54,6 +77,7 @@ function markColumnAttendance(data) {
       sheet = ss.insertSheet(sheetName);
       // Initialize header row with "Student ID" and "Student Name"
       initializeSheetHeaders(sheet);
+      Logger.log("Created new sheet: " + sheetName);
     } else {
       // Ensure the headers exist even if the sheet already exists
       ensureHeaders(sheet);
@@ -132,10 +156,11 @@ function markColumnAttendance(data) {
       studentRow = sheet.getLastRow() + 1;
       sheet.getRange(studentRow, 1).setValue(studentId);
       sheet.getRange(studentRow, 2).setValue(studentName);
+      Logger.log("Created new row for student ID: " + studentId);
     }
 
-    // Mark attendance
-    sheet.getRange(studentRow, dateColumn).setValue(status);
+    // Mark attendance with time value instead of just "present"
+    sheet.getRange(studentRow, dateColumn).setValue(attendanceValue);
 
     // Format the sheet to make it more readable
     sheet.autoResizeColumns(1, dateColumn);
@@ -151,7 +176,12 @@ function markColumnAttendance(data) {
       JSON.stringify({
         result: "success",
         message:
-          "Attendance marked for " + studentName + " on " + formattedDate,
+          "Attendance marked for " +
+          studentName +
+          " on " +
+          formattedDate +
+          " at " +
+          attendanceValue,
         student: studentName,
         date: formattedDate,
         dateColumn: dateColumn, // Include for debugging
@@ -235,7 +265,8 @@ function testColumnAttendance() {
     sheet_name: "Attendance",
     student_id: "35",
     student_name: "Test Student",
-    status: "present",
+    date: "2025-05-15",
+    time: "14:30:25",
   };
 
   const result = markColumnAttendance(testData);
@@ -411,10 +442,11 @@ function updateAttendanceStatistics(sheet) {
 
       for (let j = 0; j < dateColumns.length; j++) {
         const col = dateColumns[j];
-        const status = sheet.getRange(studentRow, col).getValue();
+        const value = sheet.getRange(studentRow, col).getValue();
 
-        // Count as present if the cell contains "present" (case-insensitive)
-        if (status && status.toString().toLowerCase() === "present") {
+        // Count as present if the cell is not empty
+        // This change handles time values as well as "present" text
+        if (value && value.toString() !== "") {
           presentCount++;
         }
       }
