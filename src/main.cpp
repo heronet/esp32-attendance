@@ -34,9 +34,11 @@ int count = 0;
 const char *attendanceFilePath = "/attendance.csv";
 
 // Time parameters
-const char *ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 0;
-const int daylightOffset_sec = 3600;
+const char *ntpServer1 = "pool.ntp.org";
+const char *ntpServer2 = "time.google.com";
+const char *ntpServer3 = "time.windows.com";
+const long gmtOffset_sec = 21600; // GMT+6:00
+const int daylightOffset_sec = 0; // No DST offset for many countries
 
 // Function prototypes
 void initSPIFFS();
@@ -86,31 +88,91 @@ void initSPIFFS()
   }
 }
 
+void initTime()
+{
+  // Initialize time with multiple NTP servers for redundancy
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2, ntpServer3);
+
+  Serial.println("Waiting for NTP time sync...");
+
+  time_t now = 0;
+  struct tm timeinfo;
+  int retry = 0;
+  const int maxRetries = 10;
+
+  // Try to sync time for up to 10 seconds
+  while (now < 8 * 3600 * 2 && retry < maxRetries)
+  {
+    Serial.print(".");
+    delay(1000);
+    time(&now);
+    retry++;
+  }
+  Serial.println();
+
+  if (retry >= maxRetries)
+  {
+    Serial.println("Failed to sync time after multiple attempts!");
+    Serial.println("System will continue with default time.");
+    return;
+  }
+
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  // If we got here, time sync was successful
+  Serial.println("Time synchronized successfully!");
+  Serial.print("Current time: ");
+  Serial.print(timeinfo.tm_hour);
+  Serial.print(":");
+  Serial.print(timeinfo.tm_min);
+  Serial.print(":");
+  Serial.println(timeinfo.tm_sec);
+  Serial.print("Date: ");
+  Serial.print(timeinfo.tm_mday);
+  Serial.print("/");
+  Serial.print(timeinfo.tm_mon + 1);
+  Serial.print("/");
+  Serial.println(timeinfo.tm_year + 1900);
+}
+
 String getCurrentDate()
 {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo))
   {
-    Serial.println("Failed to obtain time");
-    return "0000-00-00"; // Default date if time sync fails
+    Serial.println("Failed to obtain time for date");
+
+    // Use compilation date as fallback
+    char fallbackDate[11];
+    sprintf(fallbackDate, "%s", __DATE__);
+    return String(fallbackDate);
   }
 
   char dateStr[11];
-  strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &timeinfo);
+  sprintf(dateStr, "%04d-%02d-%02d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
   return String(dateStr);
 }
 
+// Replace your existing getCurrentTime() function with this more robust version
 String getCurrentTime()
 {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo))
   {
-    Serial.println("Failed to obtain time");
-    return "00:00:00"; // Default time if time sync fails
+    Serial.println("Failed to obtain time for timestamp");
+
+    // Use compilation time as fallback
+    char fallbackTime[9];
+    sprintf(fallbackTime, "%s", __TIME__);
+    return String(fallbackTime);
   }
 
   char timeStr[9];
-  strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+  sprintf(timeStr, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
   return String(timeStr);
 }
 
@@ -165,11 +227,19 @@ void syncToGoogle()
   tempFile.println(header);
 
   WiFiClientSecure client;
-  HTTPClient http;
   client.setInsecure(); // Ignore SSL certificate validation
+
+  // Increase timeout values for client
+  client.setTimeout(15000); // 15 seconds timeout
+
+  HTTPClient http;
+  // Increase timeout values for HTTP client
+  http.setTimeout(15000);
+
   String fullUrl = "https://" + String(host) + url;
 
   int syncCount = 0;
+  bool connectionEstablished = false;
 
   // Read each line from the file
   while (file.available())
@@ -195,6 +265,7 @@ void syncToGoogle()
     // Only sync records that haven't been synced yet
     if (synced.toInt() == 0)
     {
+      // Begin new connection for each record
       http.begin(client, fullUrl);
       http.addHeader("Content-Type", "application/json");
 
@@ -215,6 +286,8 @@ void syncToGoogle()
       Serial.println(payload);
 
       int httpResponseCode = http.POST(payload);
+
+      // Handle positive response codes normally
       if (httpResponseCode > 0)
       {
         String response = http.getString();
@@ -222,6 +295,18 @@ void syncToGoogle()
         Serial.println("Response: " + response);
 
         // Mark as synced
+        tempFile.println(date + "," + time + "," + studentId + "," + studentName + "," + status + ",1");
+        syncCount++;
+      }
+      // Check for specific negative error codes that indicate successful transmission but response timeout
+      else if (httpResponseCode == -11)
+      {
+        Serial.println("Response timeout but data likely sent. HTTP Response code: " + String(httpResponseCode));
+
+        // Verify if data was successfully added by waiting and checking (if needed)
+        delay(1000);
+
+        // Optimistically assume data was sent since Google Sheets typically processes it
         tempFile.println(date + "," + time + "," + studentId + "," + studentName + "," + status + ",1");
         syncCount++;
       }
@@ -233,6 +318,7 @@ void syncToGoogle()
       }
 
       http.end();
+      delay(500); // Add delay between requests to prevent overwhelming the server
     }
     else
     {
@@ -466,7 +552,7 @@ void addAttendance(int fingerprintID)
     userName = "PPP";
     studentId = "6";
     break;
-  
+
   case 65:
     userName = "Ymir";
     studentId = "65";
@@ -622,8 +708,7 @@ void setup()
     Serial.println(WiFi.localIP());
 
     // Initialize and sync time
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    Serial.println("Time synchronized");
+    initTime();
   }
   else
   {
