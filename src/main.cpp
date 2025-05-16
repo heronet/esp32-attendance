@@ -47,6 +47,9 @@ void saveAttendanceToFile(String studentId, String userName);
 String getCurrentDate();
 String getCurrentTime();
 void showMainMenu();
+void setupLEDs();
+void indicateSuccess();
+void indicateFailure();
 
 uint8_t readnumber()
 {
@@ -402,6 +405,17 @@ uint8_t getFingerprintEnroll(uint8_t id)
       Serial.println("Unknown error");
       break;
     }
+
+    if (p == FINGERPRINT_OK)
+    {
+      Serial.println("Stored!");
+      indicateSuccess(); // Success indicator
+    }
+    else
+    {
+      // In failure cases
+      indicateFailure(); // Failure indicator
+    }
   }
 
   p = finger.image2Tz(1);
@@ -561,7 +575,11 @@ int getFingerprintID()
 
   p = finger.fingerFastSearch();
   if (p != FINGERPRINT_OK)
+  {
+    // LED failure indication
+    indicateFailure();
     return -1;
+  }
 
   Serial.print("Found ID #");
   Serial.print(finger.fingerID);
@@ -607,7 +625,8 @@ void addAttendance(int fingerprintID)
   Serial.print("Welcome ");
   Serial.println(userName);
 
-  delay(2000); // Show the welcome message for 2 seconds
+  // LED success indication
+  indicateSuccess();
 }
 
 void viewStoredRecords()
@@ -717,6 +736,43 @@ void clearAllFingerprints()
   delay(2000);
 }
 
+void setupLEDs()
+{
+  // Initialize LED pins
+  pinMode(21, OUTPUT); // Green LED for success
+  pinMode(23, OUTPUT); // Red LED for failure
+
+  // Initial state - both LEDs off
+  digitalWrite(21, LOW);
+  digitalWrite(23, LOW);
+
+  // Quick test flash
+  digitalWrite(21, HIGH);
+  delay(300);
+  digitalWrite(21, LOW);
+  digitalWrite(23, HIGH);
+  delay(300);
+  digitalWrite(23, LOW);
+
+  Serial.println("LEDs initialized");
+}
+
+void indicateSuccess()
+{
+  digitalWrite(21, HIGH); // Turn on green LED
+  digitalWrite(23, LOW);  // Ensure red LED is off
+  delay(1000);            // Keep on for 1 second
+  digitalWrite(21, LOW);  // Turn off green LED
+}
+
+void indicateFailure()
+{
+  digitalWrite(23, HIGH); // Turn on red LED
+  digitalWrite(21, LOW);  // Ensure green LED is off
+  delay(1000);            // Keep on for 1 second
+  digitalWrite(23, LOW);  // Turn off red LED
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -754,7 +810,6 @@ void setup()
     Serial.println('\n');
     Serial.println("WiFi connection failed! Continuing in offline mode...");
   }
-  delay(2000);
 
   // Initialize fingerprint sensor
   Serial.println("Initializing sensor...");
@@ -772,7 +827,8 @@ void setup()
       delay(1000);
     }
   }
-  delay(2000);
+
+  setupLEDs();
 
   finger.getTemplateCount();
   Serial.print("Stored Prints: ");
