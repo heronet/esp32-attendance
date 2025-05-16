@@ -8,6 +8,8 @@ function doPost(e) {
     // Route to the appropriate function based on the command
     if (command === "column_attendance") {
       return markColumnAttendance(data);
+    } else if (command === "batch_attendance") {
+      return handleBatchAttendance(data);
     } else if (command === "mark_attendance") {
       // Keep the old function for compatibility if needed
       return JSON.stringify({
@@ -22,17 +24,87 @@ function doPost(e) {
     ).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     // Handle any errors
+    Logger.log("Error in doPost: " + error.toString());
     return ContentService.createTextOutput(
       JSON.stringify({ result: "error", message: error.toString() })
     ).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
-// Function to mark attendance using a column-based system
-function markColumnAttendance(data) {
+// New function to handle batch attendance records
+function handleBatchAttendance(data) {
   try {
     // Extract data from the request
     const sheetName = data.sheet_name;
+    const records = data.records;
+
+    if (!records || !Array.isArray(records) || records.length === 0) {
+      return ContentService.createTextOutput(
+        JSON.stringify({
+          result: "error",
+          message: "No valid records provided",
+        })
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    Logger.log("Processing batch attendance: " + records.length + " records");
+
+    // Open the spreadsheet and get the sheet
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(sheetName);
+
+    // Create the sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+      initializeSheetHeaders(sheet);
+      Logger.log("Created new sheet: " + sheetName);
+    } else {
+      // Ensure the headers exist even if the sheet already exists
+      ensureHeaders(sheet);
+    }
+
+    // Process each record
+    const results = [];
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i];
+
+      // Process each individual record using the existing function logic
+      // but without returning after each one
+      const result = processAttendanceRecord(sheet, record);
+      results.push(result);
+
+      // Log progress for large batches
+      if (i > 0 && i % 10 === 0) {
+        Logger.log(`Processed ${i} of ${records.length} records`);
+      }
+    }
+
+    // Update statistics after all records have been processed
+    updateAttendanceStatistics(sheet);
+
+    // Sort the sheet by student ID
+    sortSheetByStudentId(sheet);
+
+    return ContentService.createTextOutput(
+      JSON.stringify({
+        result: "success",
+        message: `Successfully processed ${records.length} attendance records`,
+        details: results,
+      })
+    ).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    Logger.log("Error in batch attendance: " + error.toString());
+    return ContentService.createTextOutput(
+      JSON.stringify({ result: "error", message: error.toString() })
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// Helper function to process an individual attendance record
+// Extracted from markColumnAttendance for reuse in batch processing
+function processAttendanceRecord(sheet, data) {
+  try {
+    // Extract data from the record
     const studentId = data.student_id;
     const studentName = data.student_name;
 
@@ -64,25 +136,6 @@ function markColumnAttendance(data) {
       );
     }
 
-    // Log the incoming data and formatted date for debugging
-    Logger.log("Received data: " + JSON.stringify(data));
-    Logger.log("Using formatted date: " + formattedDate);
-
-    // Open the spreadsheet and get the sheet
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    let sheet = ss.getSheetByName(sheetName);
-
-    // Create the sheet if it doesn't exist
-    if (!sheet) {
-      sheet = ss.insertSheet(sheetName);
-      // Initialize header row with "Student ID" and "Student Name"
-      initializeSheetHeaders(sheet);
-      Logger.log("Created new sheet: " + sheetName);
-    } else {
-      // Ensure the headers exist even if the sheet already exists
-      ensureHeaders(sheet);
-    }
-
     // Get all headers at once
     const lastColumn = Math.max(sheet.getLastColumn(), 2);
     const headerRange = sheet.getRange(1, 1, 1, lastColumn);
@@ -91,15 +144,10 @@ function markColumnAttendance(data) {
     // More robust date column search
     let dateColumn = -1;
 
-    // Log the headers for debugging
-    Logger.log("Looking for date: " + formattedDate);
-    Logger.log("Headers: " + JSON.stringify(headerValues));
-
     // First pass: exact match
     for (let i = 0; i < headerValues.length; i++) {
       if (headerValues[i] && headerValues[i].toString() === formattedDate) {
         dateColumn = i + 1;
-        Logger.log("Exact match found at column " + dateColumn);
         break;
       }
     }
@@ -113,10 +161,8 @@ function markColumnAttendance(data) {
             Session.getScriptTimeZone(),
             "MM/dd/yyyy"
           );
-          Logger.log("Comparing date object: " + headerDate);
           if (headerDate === formattedDate) {
             dateColumn = i + 1;
-            Logger.log("Date object match found at column " + dateColumn);
             break;
           }
         }
@@ -127,9 +173,6 @@ function markColumnAttendance(data) {
     if (dateColumn === -1) {
       dateColumn = lastColumn + 1;
       sheet.getRange(1, dateColumn).setValue(formattedDate);
-      Logger.log(
-        "Created new column at " + dateColumn + " with date " + formattedDate
-      );
     }
 
     // Find the student's row or create a new one
@@ -156,16 +199,53 @@ function markColumnAttendance(data) {
       studentRow = sheet.getLastRow() + 1;
       sheet.getRange(studentRow, 1).setValue(studentId);
       sheet.getRange(studentRow, 2).setValue(studentName);
-      Logger.log("Created new row for student ID: " + studentId);
     }
 
     // Mark attendance with time value instead of just "present"
     sheet.getRange(studentRow, dateColumn).setValue(attendanceValue);
 
-    // Format the sheet to make it more readable
-    sheet.autoResizeColumns(1, dateColumn);
+    // Format the sheet to make it more readable (only in single record mode)
+    if (sheet.getLastColumn() < 20) {
+      // Only auto-resize for smaller sheets
+      sheet.autoResizeColumns(1, dateColumn);
+    }
 
-    // Ensure statistics columns exist and update them
+    return {
+      student_id: studentId,
+      student_name: studentName,
+      date: formattedDate,
+      success: true,
+    };
+  } catch (error) {
+    Logger.log("Error processing record: " + error.toString());
+    return {
+      student_id: data.student_id,
+      success: false,
+      error: error.toString(),
+    };
+  }
+}
+
+// Modified markColumnAttendance to use the shared processing function
+function markColumnAttendance(data) {
+  try {
+    // Open the spreadsheet and get the sheet
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sheet = ss.getSheetByName(data.sheet_name);
+
+    // Create the sheet if it doesn't exist
+    if (!sheet) {
+      sheet = ss.insertSheet(data.sheet_name);
+      initializeSheetHeaders(sheet);
+    } else {
+      // Ensure the headers exist even if the sheet already exists
+      ensureHeaders(sheet);
+    }
+
+    // Process the attendance record
+    const result = processAttendanceRecord(sheet, data);
+
+    // Update statistics
     ensureStatisticColumns(sheet);
     updateAttendanceStatistics(sheet);
 
@@ -176,23 +256,48 @@ function markColumnAttendance(data) {
       JSON.stringify({
         result: "success",
         message:
-          "Attendance marked for " +
-          studentName +
-          " on " +
-          formattedDate +
-          " at " +
-          attendanceValue,
-        student: studentName,
-        date: formattedDate,
-        dateColumn: dateColumn, // Include for debugging
+          "Attendance marked for " + data.student_name + " on " + result.date,
+        student: data.student_name,
+        date: result.date,
       })
     ).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
-    Logger.log("Error: " + error.toString());
+    Logger.log("Error in markColumnAttendance: " + error.toString());
     return ContentService.createTextOutput(
       JSON.stringify({ result: "error", message: error.toString() })
     ).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// Function to test the batch attendance processing
+function testBatchAttendance() {
+  const testData = {
+    command: "batch_attendance",
+    sheet_name: "Attendance",
+    records: [
+      {
+        student_id: "1",
+        student_name: "Arik",
+        date: "2025-05-17",
+        time: "09:15:30",
+      },
+      {
+        student_id: "2",
+        student_name: "OOO",
+        date: "2025-05-17",
+        time: "09:20:45",
+      },
+      {
+        student_id: "65",
+        student_name: "Ymir",
+        date: "2025-05-17",
+        time: "09:35:12",
+      },
+    ],
+  };
+
+  const result = handleBatchAttendance(testData);
+  Logger.log(result);
 }
 
 // Initialize a new sheet with proper headers
@@ -256,106 +361,6 @@ function sortSheetByStudentId(sheet) {
   } catch (error) {
     Logger.log("Error during sorting: " + error.toString());
   }
-}
-
-// Simple test function that can be run from the script editor
-function testColumnAttendance() {
-  const testData = {
-    command: "column_attendance",
-    sheet_name: "Attendance",
-    student_id: "35",
-    student_name: "Test Student",
-    date: "2025-05-15",
-    time: "14:30:25",
-  };
-
-  const result = markColumnAttendance(testData);
-  Logger.log(result);
-}
-
-// Function to manually update attendance statistics
-function updateAllStatistics() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets();
-
-  for (let i = 0; i < sheets.length; i++) {
-    const sheet = sheets[i];
-    // Only apply to sheets that might be attendance sheets
-    if (sheet.getName().includes("Attendance")) {
-      ensureStatisticColumns(sheet);
-      updateAttendanceStatistics(sheet);
-      Logger.log("Updated statistics for sheet: " + sheet.getName());
-    }
-  }
-
-  return "Statistics updated for all attendance sheets";
-}
-
-// Add this utility function to help diagnose the issue
-function inspectHeaders() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName("Attendance");
-
-  if (!sheet) {
-    Logger.log("Sheet not found");
-    return;
-  }
-
-  const headerRange = sheet.getRange(1, 1, 1, sheet.getLastColumn());
-  const headerValues = headerRange.getValues()[0];
-
-  for (let i = 0; i < headerValues.length; i++) {
-    Logger.log(
-      "Column " +
-        (i + 1) +
-        ": " +
-        headerValues[i] +
-        " (Type: " +
-        typeof headerValues[i] +
-        ")"
-    );
-    if (headerValues[i] instanceof Date) {
-      Logger.log(
-        "  Date value: " +
-          Utilities.formatDate(
-            headerValues[i],
-            Session.getScriptTimeZone(),
-            "MM/dd/yyyy"
-          )
-      );
-    }
-  }
-}
-
-// Function to manually sort the sheet
-function manualSortByStudentId() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName("Attendance");
-
-  if (!sheet) {
-    Logger.log("Sheet not found");
-    return;
-  }
-
-  sortSheetByStudentId(sheet);
-}
-
-// Function to fix header issues in existing sheets
-function fixAllSheetHeaders() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets();
-
-  for (let i = 0; i < sheets.length; i++) {
-    const sheet = sheets[i];
-    // Only apply to sheets that might be attendance sheets
-    if (sheet.getName().includes("Attendance")) {
-      ensureHeaders(sheet);
-      updateAttendanceStatistics(sheet);
-      Logger.log("Fixed headers for sheet: " + sheet.getName());
-    }
-  }
-
-  return "Headers fixed for all attendance sheets";
 }
 
 // Function to ensure statistics columns exist

@@ -12,7 +12,7 @@ const char *ssid = "Galaxy Note10+ 5G";
 const char *password = "00000000";
 
 // Google Script Deployment ID
-const char *GScriptId = "AKfycbzntnBKPrP4zbYOWySvgm__OA4qExmtVHdiECoPXcAaBDUOblft7xTi4-2mCL1ZCobb6g";
+const char *GScriptId = "AKfycbx8oO379GMEmfpFmbtIbn9eHTuOoMmKJzLa7eSl9jZjwXl5rsYqIpPHPE-gc_yTBSiBkg";
 
 // Google Sheets setup
 const char *host = "script.google.com";
@@ -230,18 +230,21 @@ void syncToGoogle()
   client.setInsecure(); // Ignore SSL certificate validation
 
   // Increase timeout values for client
-  client.setTimeout(15000); // 15 seconds timeout
+  client.setTimeout(20000); // 20 seconds timeout
 
   HTTPClient http;
   // Increase timeout values for HTTP client
-  http.setTimeout(15000);
+  http.setTimeout(20000);
 
   String fullUrl = "https://" + String(host) + url;
 
-  int syncCount = 0;
-  bool connectionEstablished = false;
+  // Build JSON array of records to sync
+  String jsonPayload = "{\"command\": \"batch_attendance\", \"sheet_name\": \"Attendance\", \"records\": [";
 
-  // Read each line from the file
+  int recordCount = 0;
+  bool hasUnsyncedRecords = false;
+
+  // First pass: count unsynchronized records and build JSON array
   while (file.available())
   {
     String line = file.readStringUntil('\n');
@@ -262,67 +265,96 @@ void syncToGoogle()
     String status = line.substring(commaPos4 + 1, commaPos5);
     String synced = line.substring(commaPos5 + 1);
 
-    // Only sync records that haven't been synced yet
+    // Only include records that haven't been synced yet
     if (synced.toInt() == 0)
     {
-      // Begin new connection for each record
-      http.begin(client, fullUrl);
-      http.addHeader("Content-Type", "application/json");
-
-      // Build the payload
-      String payload = "{\"command\": \"column_attendance\", \"sheet_name\": \"Attendance\", "
-                       "\"student_id\": \"" +
-                       studentId + "\", "
-                                   "\"student_name\": \"" +
-                       studentName + "\", "
-                                     "\"date\": \"" +
-                       date + "\", "
-                              "\"time\": \"" +
-                       time + "\", "
-                              "\"status\": \"" +
-                       status + "\"}";
-
-      Serial.println("Publishing attendance data to Google Sheets...");
-      Serial.println(payload);
-
-      int httpResponseCode = http.POST(payload);
-
-      // Handle positive response codes normally
-      if (httpResponseCode > 0)
+      // Add comma if not the first record
+      if (hasUnsyncedRecords)
       {
-        String response = http.getString();
-        Serial.println("HTTP Response code: " + String(httpResponseCode));
-        Serial.println("Response: " + response);
-
-        // Mark as synced
-        tempFile.println(date + "," + time + "," + studentId + "," + studentName + "," + status + ",1");
-        syncCount++;
-      }
-      // Check for specific negative error codes that indicate successful transmission but response timeout
-      else if (httpResponseCode == -11)
-      {
-        Serial.println("Response timeout but data likely sent. HTTP Response code: " + String(httpResponseCode));
-
-        // Verify if data was successfully added by waiting and checking (if needed)
-        delay(1000);
-
-        // Optimistically assume data was sent since Google Sheets typically processes it
-        tempFile.println(date + "," + time + "," + studentId + "," + studentName + "," + status + ",1");
-        syncCount++;
-      }
-      else
-      {
-        Serial.println("Error publishing data. HTTP Response code: " + String(httpResponseCode));
-        // Keep as unsynced
-        tempFile.println(line);
+        jsonPayload += ",";
       }
 
-      http.end();
-      delay(500); // Add delay between requests to prevent overwhelming the server
+      // Add this record to the JSON array
+      jsonPayload += "{\"date\":\"" + date + "\",\"time\":\"" + time +
+                     "\",\"student_id\":\"" + studentId + "\",\"student_name\":\"" +
+                     studentName + "\",\"status\":\"" + status + "\"}";
+
+      hasUnsyncedRecords = true;
+      recordCount++;
+    }
+  }
+
+  // Close the JSON array and object
+  jsonPayload += "]}";
+
+  // Reset file position to beginning (after header)
+  file.seek(0);
+  file.readStringUntil('\n'); // Skip header
+
+  // If no records to sync, just report and exit
+  if (!hasUnsyncedRecords)
+  {
+    Serial.println("No unsynced records found. Nothing to upload.");
+    file.close();
+    tempFile.close();
+    return;
+  }
+
+  Serial.println("Publishing " + String(recordCount) + " attendance records to Google Sheets...");
+  Serial.println("Payload size: " + String(jsonPayload.length()) + " bytes");
+
+  // Send the batch request
+  http.begin(client, fullUrl);
+  http.addHeader("Content-Type", "application/json");
+  int httpResponseCode = http.POST(jsonPayload);
+
+  bool syncSuccessful = false;
+
+  // Handle response
+  if (httpResponseCode > 0)
+  {
+    String response = http.getString();
+    Serial.println("HTTP Response code: " + String(httpResponseCode));
+    Serial.println("Response: " + response);
+    syncSuccessful = true;
+  }
+  // Check for specific negative error codes that might still indicate success
+  else if (httpResponseCode == -11)
+  {
+    Serial.println("Response timeout but data likely sent. HTTP Response code: " + String(httpResponseCode));
+    // Optimistically assume data was sent
+    syncSuccessful = true;
+  }
+  else
+  {
+    Serial.println("Error publishing data. HTTP Response code: " + String(httpResponseCode));
+    syncSuccessful = false;
+  }
+
+  http.end();
+
+  // Now update the local records based on sync result
+  while (file.available())
+  {
+    String line = file.readStringUntil('\n');
+    if (line.length() <= 1)
+    {
+      continue; // Skip empty lines
+    }
+
+    // Parse the CSV line to check sync status
+    int lastCommaPos = line.lastIndexOf(',');
+    String syncStatus = line.substring(lastCommaPos + 1);
+
+    if (syncStatus.toInt() == 0 && syncSuccessful)
+    {
+      // Mark as synced by replacing the last 0 with 1
+      String updatedLine = line.substring(0, lastCommaPos + 1) + "1";
+      tempFile.println(updatedLine);
     }
     else
     {
-      // Already synced, just copy to temp file
+      // Keep line as is
       tempFile.println(line);
     }
   }
@@ -334,7 +366,14 @@ void syncToGoogle()
   SPIFFS.remove(attendanceFilePath);
   SPIFFS.rename("/temp.csv", attendanceFilePath);
 
-  Serial.println("Sync completed. " + String(syncCount) + " records synced.");
+  if (syncSuccessful)
+  {
+    Serial.println("Sync completed successfully. " + String(recordCount) + " records synced.");
+  }
+  else
+  {
+    Serial.println("Sync failed. Will try again later.");
+  }
 }
 
 uint8_t getFingerprintEnroll(uint8_t id)
