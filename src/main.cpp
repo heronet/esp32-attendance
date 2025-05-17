@@ -6,6 +6,15 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include <time.h>
+#include <BluetoothSerial.h> // Add BluetoothSerial library
+
+// Check if Bluetooth is properly enabled in the build
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` and enable it
+#endif
+
+// Bluetooth Serial instance
+BluetoothSerial SerialBT;
 
 // WiFi credentials
 const char *ssid = "Galaxy Note10+ 5G";
@@ -51,14 +60,50 @@ void setupLEDs();
 void indicateSuccess();
 void indicateFailure();
 
+// Helper function to read input from both Serial and SerialBT
+String readInput()
+{
+  String input = "";
+
+  // Check both Serial and Bluetooth Serial
+  while (true)
+  {
+    if (SerialBT.available())
+    {
+      input = SerialBT.readStringUntil('\n');
+      input.trim();
+      return input;
+    }
+
+    if (Serial.available())
+    {
+      input = Serial.readStringUntil('\n');
+      input.trim();
+      return input;
+    }
+
+    delay(10); // Short delay to prevent CPU hogging
+  }
+}
+
+// Helper function to print messages to both Serial and SerialBT
+void printBoth(String message)
+{
+  Serial.println(message);
+  SerialBT.println(message);
+}
+
+// Modified readnumber function to accept input from both Serial and Bluetooth
 uint8_t readnumber()
 {
   uint8_t num = 0;
   while (num == 0)
   {
-    while (!Serial.available())
-      ;
-    num = Serial.parseInt();
+    String input = readInput();
+    if (input.length() > 0)
+    {
+      num = input.toInt();
+    }
   }
   return num;
 }
@@ -67,7 +112,7 @@ void initSPIFFS()
 {
   if (!SPIFFS.begin(true))
   {
-    Serial.println("SPIFFS Mount Failed");
+    printBoth("SPIFFS Mount Failed");
     return;
   }
 
@@ -77,17 +122,17 @@ void initSPIFFS()
     File file = SPIFFS.open(attendanceFilePath, FILE_WRITE);
     if (!file)
     {
-      Serial.println("Failed to create file");
+      printBoth("Failed to create file");
       return;
     }
     // Write CSV headers
     file.println("date,time,student_id,student_name,status,synced");
     file.close();
-    Serial.println("Created attendance file with headers");
+    printBoth("Created attendance file with headers");
   }
   else
   {
-    Serial.println("Attendance file exists");
+    printBoth("Attendance file exists");
   }
 }
 
@@ -96,7 +141,7 @@ void initTime()
   // Initialize time with multiple NTP servers for redundancy
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2, ntpServer3);
 
-  Serial.println("Waiting for NTP time sync...");
+  printBoth("Waiting for NTP time sync...");
 
   time_t now = 0;
   struct tm timeinfo;
@@ -106,40 +151,40 @@ void initTime()
   // Try to sync time for up to 10 seconds
   while (now < 8 * 3600 * 2 && retry < maxRetries)
   {
-    Serial.print(".");
+    printBoth(".");
     delay(1000);
     time(&now);
     retry++;
   }
-  Serial.println();
+  printBoth("");
 
   if (retry >= maxRetries)
   {
-    Serial.println("Failed to sync time after multiple attempts!");
-    Serial.println("System will continue with default time.");
+    printBoth("Failed to sync time after multiple attempts!");
+    printBoth("System will continue with default time.");
     return;
   }
 
   if (!getLocalTime(&timeinfo))
   {
-    Serial.println("Failed to obtain time");
+    printBoth("Failed to obtain time");
     return;
   }
 
   // If we got here, time sync was successful
-  Serial.println("Time synchronized successfully!");
-  Serial.print("Current time: ");
-  Serial.print(timeinfo.tm_hour);
-  Serial.print(":");
-  Serial.print(timeinfo.tm_min);
-  Serial.print(":");
-  Serial.println(timeinfo.tm_sec);
-  Serial.print("Date: ");
-  Serial.print(timeinfo.tm_mday);
-  Serial.print("/");
-  Serial.print(timeinfo.tm_mon + 1);
-  Serial.print("/");
-  Serial.println(timeinfo.tm_year + 1900);
+  printBoth("Time synchronized successfully!");
+
+  String timeStr = "Current time: " +
+                   String(timeinfo.tm_hour) + ":" +
+                   String(timeinfo.tm_min) + ":" +
+                   String(timeinfo.tm_sec);
+  printBoth(timeStr);
+
+  String dateStr = "Date: " +
+                   String(timeinfo.tm_mday) + "/" +
+                   String(timeinfo.tm_mon + 1) + "/" +
+                   String(timeinfo.tm_year + 1900);
+  printBoth(dateStr);
 }
 
 String getCurrentDate()
@@ -147,7 +192,7 @@ String getCurrentDate()
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo))
   {
-    Serial.println("Failed to obtain time for date");
+    printBoth("Failed to obtain time for date");
 
     // Use compilation date as fallback
     char fallbackDate[11];
@@ -160,13 +205,12 @@ String getCurrentDate()
   return String(dateStr);
 }
 
-// Replace your existing getCurrentTime() function with this more robust version
 String getCurrentTime()
 {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo))
   {
-    Serial.println("Failed to obtain time for timestamp");
+    printBoth("Failed to obtain time for timestamp");
 
     // Use compilation time as fallback
     char fallbackTime[9];
@@ -187,7 +231,7 @@ void saveAttendanceToFile(String studentId, String userName)
   File file = SPIFFS.open(attendanceFilePath, FILE_APPEND);
   if (!file)
   {
-    Serial.println("Failed to open file for appending");
+    printBoth("Failed to open file for appending");
     return;
   }
 
@@ -196,21 +240,21 @@ void saveAttendanceToFile(String studentId, String userName)
   file.println(record);
   file.close();
 
-  Serial.println("Saved attendance record to file: " + record);
+  printBoth("Saved attendance record to file: " + record);
 }
 
 void syncToGoogle()
 {
   if (WiFi.status() != WL_CONNECTED)
   {
-    Serial.println("WiFi not connected. Cannot sync to Google Sheets.");
+    printBoth("WiFi not connected. Cannot sync to Google Sheets.");
     return;
   }
 
   File file = SPIFFS.open(attendanceFilePath, FILE_READ);
   if (!file)
   {
-    Serial.println("Failed to open file for reading");
+    printBoth("Failed to open file for reading");
     return;
   }
 
@@ -221,7 +265,7 @@ void syncToGoogle()
   File tempFile = SPIFFS.open("/temp.csv", FILE_WRITE);
   if (!tempFile)
   {
-    Serial.println("Failed to create temp file");
+    printBoth("Failed to create temp file");
     file.close();
     return;
   }
@@ -297,14 +341,14 @@ void syncToGoogle()
   // If no records to sync, just report and exit
   if (!hasUnsyncedRecords)
   {
-    Serial.println("No unsynced records found. Nothing to upload.");
+    printBoth("No unsynced records found. Nothing to upload.");
     file.close();
     tempFile.close();
     return;
   }
 
-  Serial.println("Publishing " + String(recordCount) + " attendance records to Google Sheets...");
-  Serial.println("Payload size: " + String(jsonPayload.length()) + " bytes");
+  printBoth("Publishing " + String(recordCount) + " attendance records to Google Sheets...");
+  printBoth("Payload size: " + String(jsonPayload.length()) + " bytes");
 
   // Send the batch request
   http.begin(client, fullUrl);
@@ -317,20 +361,20 @@ void syncToGoogle()
   if (httpResponseCode > 0)
   {
     String response = http.getString();
-    Serial.println("HTTP Response code: " + String(httpResponseCode));
-    Serial.println("Response: " + response);
+    printBoth("HTTP Response code: " + String(httpResponseCode));
+    printBoth("Response: " + response);
     syncSuccessful = true;
   }
   // Check for specific negative error codes that might still indicate success
   else if (httpResponseCode == -11)
   {
-    Serial.println("Response timeout but data likely sent. HTTP Response code: " + String(httpResponseCode));
+    printBoth("Response timeout but data likely sent. HTTP Response code: " + String(httpResponseCode));
     // Optimistically assume data was sent
     syncSuccessful = true;
   }
   else
   {
-    Serial.println("Error publishing data. HTTP Response code: " + String(httpResponseCode));
+    printBoth("Error publishing data. HTTP Response code: " + String(httpResponseCode));
     syncSuccessful = false;
   }
 
@@ -371,44 +415,43 @@ void syncToGoogle()
 
   if (syncSuccessful)
   {
-    Serial.println("Sync completed successfully. " + String(recordCount) + " records synced.");
+    printBoth("Sync completed successfully. " + String(recordCount) + " records synced.");
   }
   else
   {
-    Serial.println("Sync failed. Will try again later.");
+    printBoth("Sync failed. Will try again later.");
   }
 }
 
 uint8_t getFingerprintEnroll(uint8_t id)
 {
   int p = -1;
-  Serial.print("Waiting for valid finger to enroll as #");
-  Serial.println(id);
+  printBoth("Waiting for valid finger to enroll as #" + String(id));
   while (p != FINGERPRINT_OK)
   {
     p = finger.getImage();
     switch (p)
     {
     case FINGERPRINT_OK:
-      Serial.println("Image taken");
+      printBoth("Image taken");
       break;
     case FINGERPRINT_NOFINGER:
-      Serial.println(".");
+      printBoth(".");
       break;
     case FINGERPRINT_PACKETRECIEVEERR:
-      Serial.println("Communication error");
+      printBoth("Communication error");
       break;
     case FINGERPRINT_IMAGEFAIL:
-      Serial.println("Imaging error");
+      printBoth("Imaging error");
       break;
     default:
-      Serial.println("Unknown error");
+      printBoth("Unknown error");
       break;
     }
 
     if (p == FINGERPRINT_OK)
     {
-      Serial.println("Stored!");
+      printBoth("Stored!");
       indicateSuccess(); // Success indicator
     }
     else
@@ -422,26 +465,26 @@ uint8_t getFingerprintEnroll(uint8_t id)
   switch (p)
   {
   case FINGERPRINT_OK:
-    Serial.println("Image converted");
+    printBoth("Image converted");
     break;
   case FINGERPRINT_IMAGEMESS:
-    Serial.println("Image too messy");
+    printBoth("Image too messy");
     return p;
   case FINGERPRINT_PACKETRECIEVEERR:
-    Serial.println("Communication error");
+    printBoth("Communication error");
     return p;
   case FINGERPRINT_FEATUREFAIL:
-    Serial.println("Could not find fingerprint features");
+    printBoth("Could not find fingerprint features");
     return p;
   case FINGERPRINT_INVALIDIMAGE:
-    Serial.println("Could not find fingerprint features");
+    printBoth("Could not find fingerprint features");
     return p;
   default:
-    Serial.println("Unknown error");
+    printBoth("Unknown error");
     return p;
   }
 
-  Serial.println("Remove finger");
+  printBoth("Remove finger");
   delay(2000);
   p = 0;
   while (p != FINGERPRINT_NOFINGER)
@@ -449,7 +492,7 @@ uint8_t getFingerprintEnroll(uint8_t id)
     p = finger.getImage();
   }
 
-  Serial.println("Place same finger again");
+  printBoth("Place same finger again");
   p = -1;
   while (p != FINGERPRINT_OK)
   {
@@ -457,19 +500,19 @@ uint8_t getFingerprintEnroll(uint8_t id)
     switch (p)
     {
     case FINGERPRINT_OK:
-      Serial.println("Image taken");
+      printBoth("Image taken");
       break;
     case FINGERPRINT_NOFINGER:
-      Serial.print(".");
+      printBoth(".");
       break;
     case FINGERPRINT_PACKETRECIEVEERR:
-      Serial.println("Communication error");
+      printBoth("Communication error");
       break;
     case FINGERPRINT_IMAGEFAIL:
-      Serial.println("Imaging error");
+      printBoth("Imaging error");
       break;
     default:
-      Serial.println("Unknown error");
+      printBoth("Unknown error");
       break;
     }
   }
@@ -478,69 +521,69 @@ uint8_t getFingerprintEnroll(uint8_t id)
   switch (p)
   {
   case FINGERPRINT_OK:
-    Serial.println("Image converted");
+    printBoth("Image converted");
     break;
   case FINGERPRINT_IMAGEMESS:
-    Serial.println("Image too messy");
+    printBoth("Image too messy");
     return p;
   case FINGERPRINT_PACKETRECIEVEERR:
-    Serial.println("Communication error");
+    printBoth("Communication error");
     return p;
   case FINGERPRINT_FEATUREFAIL:
-    Serial.println("Could not find fingerprint features");
+    printBoth("Could not find fingerprint features");
     return p;
   case FINGERPRINT_INVALIDIMAGE:
-    Serial.println("Could not find fingerprint features");
+    printBoth("Could not find fingerprint features");
     return p;
   default:
-    Serial.println("Unknown error");
+    printBoth("Unknown error");
     return p;
   }
 
   p = finger.createModel();
   if (p == FINGERPRINT_OK)
   {
-    Serial.println("Prints matched!");
+    printBoth("Prints matched!");
   }
   else if (p == FINGERPRINT_PACKETRECIEVEERR)
   {
-    Serial.println("Communication error");
+    printBoth("Communication error");
     return p;
   }
   else if (p == FINGERPRINT_ENROLLMISMATCH)
   {
-    Serial.println("Fingerprints did not match");
+    printBoth("Fingerprints did not match");
     return p;
   }
   else
   {
-    Serial.println("Unknown error");
+    printBoth("Unknown error");
     return p;
   }
 
   p = finger.storeModel(id);
   if (p == FINGERPRINT_OK)
   {
-    Serial.println("Stored!");
+    printBoth("Stored!");
   }
   else if (p == FINGERPRINT_PACKETRECIEVEERR)
   {
-    Serial.println("Communication error");
+    printBoth("Communication error");
     return p;
   }
   else if (p == FINGERPRINT_BADLOCATION)
   {
-    Serial.println("Could not store in that location");
+    printBoth("Could not store in that location");
     return p;
   }
   else if (p == FINGERPRINT_FLASHERR)
   {
-    Serial.println("Error writing to flash");
+    printBoth("Error writing to flash");
     return p;
   }
   else
   {
-    Serial.println("Unknown error");
+    printBoth("Unknown error");
     return p;
   }
 
@@ -549,15 +592,14 @@ uint8_t getFingerprintEnroll(uint8_t id)
 
 void enrollFingerprint()
 {
-  Serial.println("Ready to enroll a fingerprint!");
-  Serial.println("Please type in the ID # (from 1 to 127) you want to save this finger as...");
+  printBoth("Ready to enroll a fingerprint!");
+  printBoth("Please type in the ID # (from 1 to 127) you want to save this finger as...");
   uint8_t id = readnumber();
   if (id == 0)
   { // ID #0 not allowed
     return;
   }
-  Serial.print("Enrolling ID #");
-  Serial.println(id);
+  printBoth("Enrolling ID #" + String(id));
 
   while (!getFingerprintEnroll(id))
     ;
@@ -581,10 +623,7 @@ int getFingerprintID()
     return -1;
   }
 
-  Serial.print("Found ID #");
-  Serial.print(finger.fingerID);
-  Serial.print(" with confidence of ");
-  Serial.println(finger.confidence);
+  printBoth("Found ID #" + String(finger.fingerID) + " with confidence of " + String(finger.confidence));
   return finger.fingerID;
 }
 
@@ -609,21 +648,19 @@ void addAttendance(int fingerprintID)
     userName = "PPP";
     studentId = "6";
     break;
-
   case 65:
     userName = "Ymir";
     studentId = "65";
     break;
   default:
-    Serial.println("Unknown fingerprint ID");
+    printBoth("Unknown fingerprint ID");
     return;
   }
 
   // Save attendance to local file
   saveAttendanceToFile(studentId, userName);
 
-  Serial.print("Welcome ");
-  Serial.println(userName);
+  printBoth("Welcome " + userName);
 
   // LED success indication
   indicateSuccess();
@@ -634,41 +671,38 @@ void viewStoredRecords()
   File file = SPIFFS.open(attendanceFilePath, FILE_READ);
   if (!file)
   {
-    Serial.println("Failed to open attendance file");
+    printBoth("Failed to open attendance file");
     return;
   }
 
-  Serial.println("\n--- Stored Attendance Records ---");
+  printBoth("\n--- Stored Attendance Records ---");
 
   // Read and print all lines
   while (file.available())
   {
     String line = file.readStringUntil('\n');
-    Serial.println(line);
+    printBoth(line);
   }
 
   file.close();
-  Serial.println("--- End of Records ---\n");
+  printBoth("--- End of Records ---\n");
 }
 
 void enrollMode()
 {
-  Serial.println("Entering Enroll Mode...");
-  Serial.println("Follow instructions on serial monitor");
+  printBoth("Entering Enroll Mode...");
+  printBoth("Follow instructions on serial monitor");
 
   while (true)
   {
     enrollFingerprint();
 
-    Serial.println("\nEnrollment options:");
-    Serial.println("1. Enroll another fingerprint");
-    Serial.println("2. Return to main menu");
+    printBoth("\nEnrollment options:");
+    printBoth("1. Enroll another fingerprint");
+    printBoth("2. Return to main menu");
 
-    while (!Serial.available())
-      ;
-    char option = Serial.read();
-
-    if (option == '2')
+    String option = readInput();
+    if (option == "2")
     {
       break;
     }
@@ -677,8 +711,8 @@ void enrollMode()
 
 void attendanceMode()
 {
-  Serial.println("Entering Attendance Mode...");
-  Serial.println("Place Finger...");
+  printBoth("Entering Attendance Mode...");
+  printBoth("Place Finger... (Press 'X' to exit)");
 
   while (true)
   {
@@ -689,13 +723,13 @@ void attendanceMode()
       fingerprintID = getFingerprintID();
       delay(50); // Add a small delay to avoid spamming the sensor
 
-      // Check if there's a request to exit
-      if (Serial.available())
+      // Check if there's a request to exit from either Serial or Bluetooth
+      if (Serial.available() || SerialBT.available())
       {
-        char cmd = Serial.read();
-        if (cmd == 'x' || cmd == 'X')
+        String cmd = readInput();
+        if (cmd == "x" || cmd == "X")
         {
-          Serial.println("Exiting Attendance Mode...");
+          printBoth("Exiting Attendance Mode...");
           return;
         }
       }
@@ -704,34 +738,32 @@ void attendanceMode()
     // Fingerprint found, add attendance
     addAttendance(fingerprintID);
     delay(2000); // Delay before next scan
-    Serial.println("Place Finger... (Press 'X' to exit)");
+    printBoth("Place Finger... (Press 'X' to exit)");
   }
 }
 
 void clearAllFingerprints()
 {
-  Serial.println("Are you sure you want to clear all fingerprints? (Y/N)");
+  printBoth("Are you sure you want to clear all fingerprints? (Y/N)");
 
-  while (!Serial.available())
-    ;
-  char confirmation = Serial.read();
-  if (confirmation == 'Y' || confirmation == 'y')
+  String confirmation = readInput();
+  if (confirmation == "Y" || confirmation == "y")
   {
-    Serial.println("Clearing all fingerprints...");
+    printBoth("Clearing all fingerprints...");
 
     uint8_t p = finger.emptyDatabase();
     if (p == FINGERPRINT_OK)
     {
-      Serial.println("All fingerprints cleared successfully!");
+      printBoth("All fingerprints cleared successfully!");
     }
     else
     {
-      Serial.println("Failed to clear fingerprints.");
+      printBoth("Failed to clear fingerprints.");
     }
   }
   else
   {
-    Serial.println("Clear operation canceled.");
+    printBoth("Clear operation canceled.");
   }
   delay(2000);
 }
@@ -754,7 +786,7 @@ void setupLEDs()
   delay(300);
   digitalWrite(23, LOW);
 
-  Serial.println("LEDs initialized");
+  printBoth("LEDs initialized");
 }
 
 void indicateSuccess()
@@ -776,52 +808,52 @@ void indicateFailure()
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("System initialized");
+
+  // Initialize Bluetooth Serial with device name
+  SerialBT.begin("ESP32-Attendance"); // Bluetooth device name
+
+  printBoth("System initialized");
+  printBoth("Bluetooth device started, connect to 'ESP32-Attendance' to control");
 
   // Initialize SPIFFS
   initSPIFFS();
 
   // Connect to WiFi
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to ");
-  Serial.print(ssid);
-  Serial.println(" ...");
+  printBoth("Connecting to " + String(ssid) + " ...");
 
   int wifiCounter = 0;
   while (WiFi.status() != WL_CONNECTED && wifiCounter < 20) // Timeout after 20 seconds
   {
     delay(1000);
-    Serial.print(".");
+    printBoth(".");
     wifiCounter++;
   }
 
   if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.println('\n');
-    Serial.println("Connection established!");
-    Serial.print("IP address:\t");
-    Serial.println(WiFi.localIP());
+    printBoth("\nConnection established!");
+    printBoth("IP address: " + WiFi.localIP().toString());
 
     // Initialize and sync time
     initTime();
   }
   else
   {
-    Serial.println('\n');
-    Serial.println("WiFi connection failed! Continuing in offline mode...");
+    printBoth("\nWiFi connection failed! Continuing in offline mode...");
   }
 
   // Initialize fingerprint sensor
-  Serial.println("Initializing sensor...");
+  printBoth("Initializing sensor...");
 
   finger.begin(57600);
   if (finger.verifyPassword())
   {
-    Serial.println("Found fingerprint sensor!");
+    printBoth("Found fingerprint sensor!");
   }
   else
   {
-    Serial.println("Did not find fingerprint sensor :(");
+    printBoth("Did not find fingerprint sensor :(");
     while (1)
     {
       delay(1000);
@@ -831,18 +863,15 @@ void setup()
   setupLEDs();
 
   finger.getTemplateCount();
-  Serial.print("Stored Prints: ");
-  Serial.println(finger.templateCount);
+  printBoth("Stored Prints: " + String(finger.templateCount));
 
   if (finger.templateCount == 0)
   {
-    Serial.println("Sensor doesn't contain any fingerprint data. Please enroll a fingerprint.");
+    printBoth("Sensor doesn't contain any fingerprint data. Please enroll a fingerprint.");
   }
   else
   {
-    Serial.print("Sensor contains ");
-    Serial.print(finger.templateCount);
-    Serial.println(" templates");
+    printBoth("Sensor contains " + String(finger.templateCount) + " templates");
   }
   delay(2000);
 
@@ -852,50 +881,51 @@ void setup()
 
 void showMainMenu()
 {
-  Serial.println("\n=== Attendance System Menu ===");
-  Serial.println("1. Enroll Mode");
-  Serial.println("2. Attendance Mode");
-  Serial.println("3. Clear All Fingerprints");
-  Serial.println("4. View Stored Records");
-  Serial.println("5. Sync to Google Sheets");
-  Serial.println("==============================");
+  printBoth("\n=== Attendance System Menu ===");
+  printBoth("1. Enroll Mode");
+  printBoth("2. Attendance Mode");
+  printBoth("3. Clear All Fingerprints");
+  printBoth("4. View Stored Records");
+  printBoth("5. Sync to Google Sheets");
+  printBoth("==============================");
 }
 
 void loop()
 {
-  // Wait for user input to select mode
-  if (Serial.available())
+  // Check for input from either Serial or Bluetooth
+  if (Serial.available() || SerialBT.available())
   {
-    char mode = Serial.read();
-    if (mode == '1')
+    String mode = readInput();
+
+    if (mode == "1")
     {
       enrollMode();
       showMainMenu();
     }
-    else if (mode == '2')
+    else if (mode == "2")
     {
       attendanceMode();
       showMainMenu();
     }
-    else if (mode == '3')
+    else if (mode == "3")
     {
       clearAllFingerprints();
       showMainMenu();
     }
-    else if (mode == '4')
+    else if (mode == "4")
     {
       viewStoredRecords();
       showMainMenu();
     }
-    else if (mode == '5')
+    else if (mode == "5")
     {
-      Serial.println("Syncing data to Google Sheets...");
+      printBoth("Syncing data to Google Sheets...");
       syncToGoogle();
       showMainMenu();
     }
     else
     {
-      Serial.println("Invalid choice. Please enter 1-5.");
+      printBoth("Invalid choice. Please enter 1-5.");
     }
   }
 }
