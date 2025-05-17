@@ -59,6 +59,7 @@ void showMainMenu();
 void setupLEDs();
 void indicateSuccess();
 void indicateFailure();
+void clearAttendanceData();
 
 // Helper function to read input from both Serial and SerialBT
 String readInput()
@@ -688,6 +689,61 @@ void viewStoredRecords()
   printBoth("--- End of Records ---\n");
 }
 
+// New function to clear attendance data
+void clearAttendanceData()
+{
+  printBoth("Are you sure you want to clear all attendance records? (Y/N)");
+  printBoth("WARNING: This will delete all attendance data!");
+  
+  String confirmation = readInput();
+  if (confirmation == "Y" || confirmation == "y")
+  {
+    // Double confirmation for safety
+    printBoth("ALL ATTENDANCE RECORDS WILL BE PERMANENTLY DELETED!");
+    printBoth("Type 'CONFIRM' to proceed:");
+    
+    String finalConfirmation = readInput();
+    if (finalConfirmation == "CONFIRM")
+    {
+      // Delete the old file
+      if (SPIFFS.remove(attendanceFilePath))
+      {
+        // Create a new file with only the header
+        File file = SPIFFS.open(attendanceFilePath, FILE_WRITE);
+        if (file)
+        {
+          // Write CSV headers
+          file.println("date,time,student_id,student_name,status,synced");
+          file.close();
+          
+          printBoth("All attendance records have been cleared successfully!");
+          indicateSuccess(); // Visual confirmation
+        }
+        else
+        {
+          printBoth("Error: Failed to create a new attendance file");
+          indicateFailure();
+        }
+      }
+      else
+      {
+        printBoth("Error: Failed to remove the old attendance file");
+        indicateFailure();
+      }
+    }
+    else
+    {
+      printBoth("Operation canceled: Confirmation text didn't match");
+    }
+  }
+  else
+  {
+    printBoth("Operation canceled");
+  }
+  
+  delay(2000);
+}
+
 void enrollMode()
 {
   printBoth("Entering Enroll Mode...");
@@ -887,6 +943,7 @@ void showMainMenu()
   printBoth("3. Clear All Fingerprints");
   printBoth("4. View Stored Records");
   printBoth("5. Sync to Google Sheets");
+  printBoth("6. Clear Attendance Data");
   printBoth("==============================");
 }
 
@@ -923,9 +980,14 @@ void loop()
       syncToGoogle();
       showMainMenu();
     }
+    else if (mode == "6")
+    {
+      clearAttendanceData();
+      showMainMenu();
+    }
     else
     {
-      printBoth("Invalid choice. Please enter 1-5.");
+      printBoth("Invalid choice. Please enter 1-6.");
     }
   }
 }
