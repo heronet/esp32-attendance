@@ -20,7 +20,7 @@ const char *ssid = "Sony Xperia 1 III";
 const char *password = "00000000";
 
 // Google Script Deployment ID
-const char *GScriptId = "AKfycbypCLHdHPsDAE7egtnyBk_AD6SLkyVuzXUkl0uZHqow34LV_G4cej8d1ZARehJumcn0dQ";
+const char *GScriptId = "AKfycby_2izhGidfcOPhpAfs7zhAWXHcK7oeZnUniauozbuc9rR52E7b_BaRJW4IgwTPPsz_rQ";
 
 // Google Sheets setup
 const char *host = "script.google.com";
@@ -37,7 +37,7 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&FINGERPRINT_SERIAL);
 int u = 0;
 int v = 0;
 int count = 0;
-String currentDate = "2025-05-19"; // Default date (today's date)
+String currentDate = "19/5"; // Default date (today's date)
 
 // CSV file path in SPIFFS
 const char *attendanceFilePath = "/attendance.csv";
@@ -45,7 +45,7 @@ const char *attendanceFilePath = "/attendance.csv";
 // Function prototypes
 void initSPIFFS();
 void syncToGoogle();
-void saveAttendanceToFile(String studentId, String userName);
+void saveAttendanceToFile(String studentId);
 void showMainMenu();
 void setupLEDs();
 void indicateSuccess();
@@ -120,7 +120,7 @@ void initSPIFFS()
       return;
     }
     // Write CSV headers
-    file.println("date,student_id,student_name,status,synced");
+    file.println("date,student_id,status,synced");
     file.close();
     printBoth("Created attendance file with headers");
   }
@@ -130,7 +130,7 @@ void initSPIFFS()
   }
 }
 
-void saveAttendanceToFile(String studentId, String userName)
+void saveAttendanceToFile(String studentId)
 {
   File file = SPIFFS.open(attendanceFilePath, FILE_APPEND);
   if (!file)
@@ -139,8 +139,8 @@ void saveAttendanceToFile(String studentId, String userName)
     return;
   }
 
-  // Format: date,student_id,student_name,status,synced
-  String record = currentDate + "," + studentId + "," + userName + ",present,0";
+  // Format: date,student_id,status,synced
+  String record = currentDate + "," + studentId + ",present,0";
   file.println(record);
   file.close();
 
@@ -251,13 +251,11 @@ void syncToGoogle()
     int commaPos1 = line.indexOf(',');
     int commaPos2 = line.indexOf(',', commaPos1 + 1);
     int commaPos3 = line.indexOf(',', commaPos2 + 1);
-    int commaPos4 = line.indexOf(',', commaPos3 + 1);
 
     String date = line.substring(0, commaPos1);
     String studentId = line.substring(commaPos1 + 1, commaPos2);
-    String studentName = line.substring(commaPos2 + 1, commaPos3);
-    String status = line.substring(commaPos3 + 1, commaPos4);
-    String synced = line.substring(commaPos4 + 1);
+    String status = line.substring(commaPos2 + 1, commaPos3);
+    String synced = line.substring(commaPos3 + 1);
 
     // Only include records that haven't been synced yet
     if (synced.toInt() == 0)
@@ -269,8 +267,8 @@ void syncToGoogle()
       }
 
       // Add this record to the JSON array
-      jsonPayload += "{\"date\":\"" + date + "\",\"student_id\":\"" + studentId +
-                     "\",\"student_name\":\"" + studentName + "\",\"status\":\"" + status + "\"}";
+
+      jsonPayload += "{\"date\":\"" + date + "\",\"student_id\":\"" + studentId + "\",\"status\":\"" + status + "\"}";
 
       hasUnsyncedRecords = true;
       recordCount++;
@@ -578,39 +576,25 @@ int getFingerprintID()
 }
 
 // Function to add attendance
+
 void addAttendance(int fingerprintID)
 {
-  String userName;
   String studentId;
 
-  // Map fingerprint ID to user data
-  switch (fingerprintID)
+  if (fingerprintID)
   {
-  case 1:
-    userName = "Arik";
-    studentId = "1";
-    break;
-  case 2:
-    userName = "OOO";
-    studentId = "2";
-    break;
-  case 6:
-    userName = "PPP";
-    studentId = "6";
-    break;
-  case 65:
-    userName = "Ymir";
-    studentId = "65";
-    break;
-  default:
+
+    printBoth("Welcome " + String(fingerprintID));
+    studentId = String(fingerprintID);
+  }
+  else
+  {
     printBoth("Unknown fingerprint ID");
     return;
   }
 
-  // Save attendance to local file
-  saveAttendanceToFile(studentId, userName);
-
-  printBoth("Welcome " + userName);
+  // Save attendance to local file (passing only studentId)
+  saveAttendanceToFile(studentId);
 
   // LED success indication
   indicateSuccess();
@@ -716,13 +700,12 @@ void enrollMode()
 
 void setCurrentDate()
 {
-  printBoth("Enter today's date in YYYY-MM-DD format (e.g., 2025-05-19):");
+  printBoth("Enter today's date in DD/MM format (e.g., 19/5):");
   String dateInput = readInput();
+  dateInput.trim();
 
   // Basic validation - check if the input matches the expected format
-  if (dateInput.length() == 10 &&
-      dateInput.charAt(4) == '-' &&
-      dateInput.charAt(7) == '-')
+  if (dateInput.length())
   {
     currentDate = dateInput;
     printBoth("Date set to: " + currentDate);

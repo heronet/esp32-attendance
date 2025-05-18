@@ -106,7 +106,6 @@ function processAttendanceRecord(sheet, data) {
   try {
     // Extract data from the record
     const studentId = data.student_id;
-    const studentName = data.student_name;
 
     // Use status field directly - if available, otherwise default to "present"
     const attendanceValue = data.status || "present";
@@ -114,18 +113,8 @@ function processAttendanceRecord(sheet, data) {
     // Use provided date from the ESP32 if available, otherwise use today's date
     let formattedDate;
     if (data.date) {
-      // Convert from YYYY-MM-DD to MM/DD/YYYY format for Google Sheets
-      const dateParts = data.date.split("-");
-      if (dateParts.length === 3) {
-        formattedDate = dateParts[1] + "/" + dateParts[2] + "/" + dateParts[0];
-      } else {
-        // If date format is unexpected, use today's date
-        formattedDate = Utilities.formatDate(
-          new Date(),
-          Session.getScriptTimeZone(),
-          "MM/dd/yyyy"
-        );
-      }
+      // Use the date as-is without format checking
+      formattedDate = data.date;
     } else {
       // If no date provided, use today's date
       formattedDate = Utilities.formatDate(
@@ -136,39 +125,31 @@ function processAttendanceRecord(sheet, data) {
     }
 
     // Get all headers at once
-    const lastColumn = Math.max(sheet.getLastColumn(), 2);
+    const lastColumn = Math.max(sheet.getLastColumn(), 1);
     const headerRange = sheet.getRange(1, 1, 1, lastColumn);
     const headerValues = headerRange.getValues()[0];
 
-    // More robust date column search
+    // Find the date column - more robust search
     let dateColumn = -1;
 
-    // First pass: exact match
+    // Search for the date column with exact match or case-insensitive match
     for (let i = 0; i < headerValues.length; i++) {
-      if (headerValues[i] && headerValues[i].toString() === formattedDate) {
-        dateColumn = i + 1;
-        break;
-      }
-    }
+      if (headerValues[i]) {
+        const headerVal = headerValues[i].toString().trim();
+        const dateVal = formattedDate.toString().trim();
 
-    // If no exact match, try to handle date objects
-    if (dateColumn === -1) {
-      for (let i = 0; i < headerValues.length; i++) {
-        if (headerValues[i] && headerValues[i] instanceof Date) {
-          const headerDate = Utilities.formatDate(
-            headerValues[i],
-            Session.getScriptTimeZone(),
-            "MM/dd/yyyy"
-          );
-          if (headerDate === formattedDate) {
-            dateColumn = i + 1;
-            break;
-          }
+        // Try both exact match and case-insensitive match
+        if (
+          headerVal === dateVal ||
+          headerVal.toLowerCase() === dateVal.toLowerCase()
+        ) {
+          dateColumn = i + 1;
+          break;
         }
       }
     }
 
-    // If still no match, create a new column
+    // If no match, create a new column
     if (dateColumn === -1) {
       dateColumn = lastColumn + 1;
       sheet.getRange(1, dateColumn).setValue(formattedDate);
@@ -197,7 +178,6 @@ function processAttendanceRecord(sheet, data) {
     if (studentRow === -1) {
       studentRow = sheet.getLastRow() + 1;
       sheet.getRange(studentRow, 1).setValue(studentId);
-      sheet.getRange(studentRow, 2).setValue(studentName);
     }
 
     // Mark attendance with status value
@@ -211,7 +191,6 @@ function processAttendanceRecord(sheet, data) {
 
     return {
       student_id: studentId,
-      student_name: studentName,
       date: formattedDate,
       success: true,
     };
@@ -255,8 +234,11 @@ function markColumnAttendance(data) {
       JSON.stringify({
         result: "success",
         message:
-          "Attendance marked for " + data.student_name + " on " + result.date,
-        student: data.student_name,
+          "Attendance marked for student ID " +
+          data.student_id +
+          " on " +
+          result.date,
+        student_id: data.student_id,
         date: result.date,
       })
     ).setMimeType(ContentService.MimeType.JSON);
@@ -276,20 +258,17 @@ function testBatchAttendance() {
     records: [
       {
         student_id: "1",
-        student_name: "Arik",
-        date: "2025-05-17",
+        date: "21/5",
         status: "present",
       },
       {
         student_id: "2",
-        student_name: "OOO",
-        date: "2025-05-17",
+        date: "21/5",
         status: "present",
       },
       {
         student_id: "65",
-        student_name: "Ymir",
-        date: "2025-05-17",
+        date: "19/5",
         status: "present",
       },
     ],
@@ -302,11 +281,10 @@ function testBatchAttendance() {
 // Initialize a new sheet with proper headers
 function initializeSheetHeaders(sheet) {
   sheet.getRange("A1").setValue("Student ID");
-  sheet.getRange("B1").setValue("Student Name");
 
   // Add statistics columns
-  sheet.getRange("C1").setValue("Attended Days");
-  sheet.getRange("D1").setValue("Percentage");
+  sheet.getRange("B1").setValue("Attended Days");
+  sheet.getRange("C1").setValue("Percentage");
 
   // Make the header row bold and freeze it
   sheet.getRange("1:1").setFontWeight("bold");
@@ -320,14 +298,9 @@ function initializeSheetHeaders(sheet) {
 function ensureHeaders(sheet) {
   // Check if headers exist, if not add them
   const headerA = sheet.getRange("A1").getValue();
-  const headerB = sheet.getRange("B1").getValue();
 
   if (headerA === "" || headerA !== "Student ID") {
     sheet.getRange("A1").setValue("Student ID");
-  }
-
-  if (headerB === "" || headerB !== "Student Name") {
-    sheet.getRange("B1").setValue("Student Name");
   }
 
   // Make header row bold and freeze it if not already
@@ -381,21 +354,23 @@ function ensureStatisticColumns(sheet) {
     }
   }
 
-  // If columns don't exist, create them at the end
+  // If columns don't exist, create them
   if (attendedDaysCol === -1) {
-    const newColumn = lastColumn + 1;
-    sheet.getRange(1, newColumn).setValue("Attended Days");
-    sheet.getRange(1, newColumn).setFontWeight("bold");
-    sheet.getRange(1, newColumn).setBackground("#E0E0E0");
-    attendedDaysCol = newColumn;
+    // Add it right after the Student ID column
+    attendedDaysCol = 2;
+    sheet.insertColumnAfter(1);
+    sheet.getRange(1, attendedDaysCol).setValue("Attended Days");
+    sheet.getRange(1, attendedDaysCol).setFontWeight("bold");
+    sheet.getRange(1, attendedDaysCol).setBackground("#E0E0E0");
   }
 
   if (percentageCol === -1) {
-    const newColumn = attendedDaysCol + 1;
-    sheet.getRange(1, newColumn).setValue("Percentage");
-    sheet.getRange(1, newColumn).setFontWeight("bold");
-    sheet.getRange(1, newColumn).setBackground("#E0E0E0");
-    percentageCol = newColumn;
+    // Add it right after the Attended Days column
+    percentageCol = attendedDaysCol + 1;
+    sheet.insertColumnAfter(attendedDaysCol);
+    sheet.getRange(1, percentageCol).setValue("Percentage");
+    sheet.getRange(1, percentageCol).setFontWeight("bold");
+    sheet.getRange(1, percentageCol).setBackground("#E0E0E0");
   }
 
   return { attendedDaysCol, percentageCol };
@@ -414,25 +389,19 @@ function updateAttendanceStatistics(sheet) {
     const attendedDaysCol = columns.attendedDaysCol;
     const percentageCol = columns.percentageCol;
 
-    // Find the columns that contain attendance data (exclude first 2 columns and statistic columns)
+    // Find the columns that contain attendance data (exclude first column and statistic columns)
     const headerRange = sheet.getRange(1, 1, 1, sheet.getLastColumn());
     const headerValues = headerRange.getValues()[0];
 
     const dateColumns = [];
-    for (let i = 2; i < headerValues.length; i++) {
-      // Skip the statistics columns
-      if (i + 1 === attendedDaysCol || i + 1 === percentageCol) {
+    for (let i = 0; i < headerValues.length; i++) {
+      // Skip the first column (Student ID) and statistics columns
+      if (i + 1 === 1 || i + 1 === attendedDaysCol || i + 1 === percentageCol) {
         continue;
       }
 
-      // Check if it's a date column
-      const header = headerValues[i];
-      if (
-        header &&
-        (header instanceof Date || isDateString(header.toString()))
-      ) {
-        dateColumns.push(i + 1); // 1-based column index
-      }
+      // Any other column is considered a date column
+      dateColumns.push(i + 1); // 1-based column index
     }
 
     // For each student, calculate attendance statistics
@@ -479,21 +448,4 @@ function updateAttendanceStatistics(sheet) {
   } catch (error) {
     Logger.log("Error updating statistics: " + error.toString());
   }
-}
-
-// Helper function to check if a string is a date
-function isDateString(str) {
-  // Check for common date formats (MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD)
-  const datePatterns = [
-    /^\d{1,2}\/\d{1,2}\/\d{4}$/, // MM/DD/YYYY or DD/MM/YYYY
-    /^\d{4}-\d{1,2}-\d{1,2}$/, // YYYY-MM-DD
-  ];
-
-  for (let i = 0; i < datePatterns.length; i++) {
-    if (datePatterns[i].test(str)) {
-      return true;
-    }
-  }
-
-  return false;
 }
