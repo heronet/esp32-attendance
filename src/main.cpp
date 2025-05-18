@@ -6,7 +6,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 #include <time.h>
-#include <BluetoothSerial.h> // Add BluetoothSerial library
+#include <BluetoothSerial.h>
 
 // Check if Bluetooth is properly enabled in the build
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -17,11 +17,11 @@
 BluetoothSerial SerialBT;
 
 // WiFi credentials
-const char *ssid = "Galaxy Note10+ 5G";
+const char *ssid = "Sony Xperia 1 III";
 const char *password = "00000000";
 
 // Google Script Deployment ID
-const char *GScriptId = "AKfycbx8oO379GMEmfpFmbtIbn9eHTuOoMmKJzLa7eSl9jZjwXl5rsYqIpPHPE-gc_yTBSiBkg";
+const char *GScriptId = "AKfycbwqNpRjSziXJPpG1T9Ebkm1L8pZHvYwoz1a31Dzeo0BZcdSTqGQhTLxKLZmwYGXkOl4pQ";
 
 // Google Sheets setup
 const char *host = "script.google.com";
@@ -694,14 +694,14 @@ void clearAttendanceData()
 {
   printBoth("Are you sure you want to clear all attendance records? (Y/N)");
   printBoth("WARNING: This will delete all attendance data!");
-  
+
   String confirmation = readInput();
   if (confirmation == "Y" || confirmation == "y")
   {
     // Double confirmation for safety
     printBoth("ALL ATTENDANCE RECORDS WILL BE PERMANENTLY DELETED!");
     printBoth("Type 'CONFIRM' to proceed:");
-    
+
     String finalConfirmation = readInput();
     if (finalConfirmation == "CONFIRM")
     {
@@ -715,7 +715,7 @@ void clearAttendanceData()
           // Write CSV headers
           file.println("date,time,student_id,student_name,status,synced");
           file.close();
-          
+
           printBoth("All attendance records have been cleared successfully!");
           indicateSuccess(); // Visual confirmation
         }
@@ -740,7 +740,7 @@ void clearAttendanceData()
   {
     printBoth("Operation canceled");
   }
-  
+
   delay(2000);
 }
 
