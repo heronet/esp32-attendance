@@ -108,9 +108,8 @@ function processAttendanceRecord(sheet, data) {
     const studentId = data.student_id;
     const studentName = data.student_name;
 
-    // Instead of status, we'll use the time if provided
-    // If time is not provided, fall back to "present"
-    const attendanceValue = data.time || "present";
+    // Use status field directly - if available, otherwise default to "present"
+    const attendanceValue = data.status || "present";
 
     // Use provided date from the ESP32 if available, otherwise use today's date
     let formattedDate;
@@ -201,7 +200,7 @@ function processAttendanceRecord(sheet, data) {
       sheet.getRange(studentRow, 2).setValue(studentName);
     }
 
-    // Mark attendance with time value instead of just "present"
+    // Mark attendance with status value
     sheet.getRange(studentRow, dateColumn).setValue(attendanceValue);
 
     // Format the sheet to make it more readable (only in single record mode)
@@ -279,19 +278,19 @@ function testBatchAttendance() {
         student_id: "1",
         student_name: "Arik",
         date: "2025-05-17",
-        time: "09:15:30",
+        status: "present",
       },
       {
         student_id: "2",
         student_name: "OOO",
         date: "2025-05-17",
-        time: "09:20:45",
+        status: "present",
       },
       {
         student_id: "65",
         student_name: "Ymir",
         date: "2025-05-17",
-        time: "09:35:12",
+        status: "present",
       },
     ],
   };
@@ -450,7 +449,6 @@ function updateAttendanceStatistics(sheet) {
         const value = sheet.getRange(studentRow, col).getValue();
 
         // Count as present if the cell is not empty
-        // This change handles time values as well as "present" text
         if (value && value.toString() !== "") {
           presentCount++;
         }
