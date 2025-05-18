@@ -5,7 +5,6 @@
 #include <SPI.h>
 #include <FS.h>
 #include <SPIFFS.h>
-#include <time.h>
 #include <BluetoothSerial.h>
 
 // Check if Bluetooth is properly enabled in the build
@@ -21,7 +20,7 @@ const char *ssid = "Sony Xperia 1 III";
 const char *password = "00000000";
 
 // Google Script Deployment ID
-const char *GScriptId = "AKfycbwqNpRjSziXJPpG1T9Ebkm1L8pZHvYwoz1a31Dzeo0BZcdSTqGQhTLxKLZmwYGXkOl4pQ";
+const char *GScriptId = "AKfycbypCLHdHPsDAE7egtnyBk_AD6SLkyVuzXUkl0uZHqow34LV_G4cej8d1ZARehJumcn0dQ";
 
 // Google Sheets setup
 const char *host = "script.google.com";
@@ -38,28 +37,22 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&FINGERPRINT_SERIAL);
 int u = 0;
 int v = 0;
 int count = 0;
+String currentDate = "2025-05-19"; // Default date (today's date)
 
 // CSV file path in SPIFFS
 const char *attendanceFilePath = "/attendance.csv";
-
-// Time parameters
-const char *ntpServer1 = "pool.ntp.org";
-const char *ntpServer2 = "time.google.com";
-const char *ntpServer3 = "time.windows.com";
-const long gmtOffset_sec = 21600; // GMT+6:00
-const int daylightOffset_sec = 0; // No DST offset for many countries
 
 // Function prototypes
 void initSPIFFS();
 void syncToGoogle();
 void saveAttendanceToFile(String studentId, String userName);
-String getCurrentDate();
-String getCurrentTime();
 void showMainMenu();
 void setupLEDs();
 void indicateSuccess();
 void indicateFailure();
 void clearAttendanceData();
+void connectToWiFi();
+void disconnectWiFi();
 
 // Helper function to read input from both Serial and SerialBT
 String readInput()
@@ -127,7 +120,7 @@ void initSPIFFS()
       return;
     }
     // Write CSV headers
-    file.println("date,time,student_id,student_name,status,synced");
+    file.println("date,student_id,student_name,status,synced");
     file.close();
     printBoth("Created attendance file with headers");
   }
@@ -137,98 +130,8 @@ void initSPIFFS()
   }
 }
 
-void initTime()
-{
-  // Initialize time with multiple NTP servers for redundancy
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2, ntpServer3);
-
-  printBoth("Waiting for NTP time sync...");
-
-  time_t now = 0;
-  struct tm timeinfo;
-  int retry = 0;
-  const int maxRetries = 10;
-
-  // Try to sync time for up to 10 seconds
-  while (now < 8 * 3600 * 2 && retry < maxRetries)
-  {
-    printBoth(".");
-    delay(1000);
-    time(&now);
-    retry++;
-  }
-  printBoth("");
-
-  if (retry >= maxRetries)
-  {
-    printBoth("Failed to sync time after multiple attempts!");
-    printBoth("System will continue with default time.");
-    return;
-  }
-
-  if (!getLocalTime(&timeinfo))
-  {
-    printBoth("Failed to obtain time");
-    return;
-  }
-
-  // If we got here, time sync was successful
-  printBoth("Time synchronized successfully!");
-
-  String timeStr = "Current time: " +
-                   String(timeinfo.tm_hour) + ":" +
-                   String(timeinfo.tm_min) + ":" +
-                   String(timeinfo.tm_sec);
-  printBoth(timeStr);
-
-  String dateStr = "Date: " +
-                   String(timeinfo.tm_mday) + "/" +
-                   String(timeinfo.tm_mon + 1) + "/" +
-                   String(timeinfo.tm_year + 1900);
-  printBoth(dateStr);
-}
-
-String getCurrentDate()
-{
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    printBoth("Failed to obtain time for date");
-
-    // Use compilation date as fallback
-    char fallbackDate[11];
-    sprintf(fallbackDate, "%s", __DATE__);
-    return String(fallbackDate);
-  }
-
-  char dateStr[11];
-  sprintf(dateStr, "%04d-%02d-%02d", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
-  return String(dateStr);
-}
-
-String getCurrentTime()
-{
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-  {
-    printBoth("Failed to obtain time for timestamp");
-
-    // Use compilation time as fallback
-    char fallbackTime[9];
-    sprintf(fallbackTime, "%s", __TIME__);
-    return String(fallbackTime);
-  }
-
-  char timeStr[9];
-  sprintf(timeStr, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-  return String(timeStr);
-}
-
 void saveAttendanceToFile(String studentId, String userName)
 {
-  String date = getCurrentDate();
-  String time = getCurrentTime();
-
   File file = SPIFFS.open(attendanceFilePath, FILE_APPEND);
   if (!file)
   {
@@ -236,16 +139,59 @@ void saveAttendanceToFile(String studentId, String userName)
     return;
   }
 
-  // Format: date,time,student_id,student_name,status,synced
-  String record = date + "," + time + "," + studentId + "," + userName + ",present,0";
+  // Format: date,student_id,student_name,status,synced
+  String record = currentDate + "," + studentId + "," + userName + ",present,0";
   file.println(record);
   file.close();
 
   printBoth("Saved attendance record to file: " + record);
 }
 
+void connectToWiFi()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    printBoth("WiFi already connected!");
+    return;
+  }
+
+  printBoth("Connecting to " + String(ssid) + " ...");
+  WiFi.begin(ssid, password);
+
+  int wifiCounter = 0;
+  while (WiFi.status() != WL_CONNECTED && wifiCounter < 20) // Timeout after 20 seconds
+  {
+    delay(1000);
+    printBoth(".");
+    wifiCounter++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    printBoth("\nConnection established!");
+    printBoth("IP address: " + WiFi.localIP().toString());
+  }
+  else
+  {
+    printBoth("\nWiFi connection failed! Cannot sync to Google Sheets.");
+  }
+}
+
+void disconnectWiFi()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    printBoth("Disconnecting from WiFi...");
+    WiFi.disconnect();
+    printBoth("WiFi disconnected");
+  }
+}
+
 void syncToGoogle()
 {
+  // Connect to WiFi before syncing
+  connectToWiFi();
+
   if (WiFi.status() != WL_CONNECTED)
   {
     printBoth("WiFi not connected. Cannot sync to Google Sheets.");
@@ -256,6 +202,7 @@ void syncToGoogle()
   if (!file)
   {
     printBoth("Failed to open file for reading");
+    disconnectWiFi();
     return;
   }
 
@@ -268,6 +215,7 @@ void syncToGoogle()
   {
     printBoth("Failed to create temp file");
     file.close();
+    disconnectWiFi();
     return;
   }
 
@@ -304,14 +252,12 @@ void syncToGoogle()
     int commaPos2 = line.indexOf(',', commaPos1 + 1);
     int commaPos3 = line.indexOf(',', commaPos2 + 1);
     int commaPos4 = line.indexOf(',', commaPos3 + 1);
-    int commaPos5 = line.indexOf(',', commaPos4 + 1);
 
     String date = line.substring(0, commaPos1);
-    String time = line.substring(commaPos1 + 1, commaPos2);
-    String studentId = line.substring(commaPos2 + 1, commaPos3);
-    String studentName = line.substring(commaPos3 + 1, commaPos4);
-    String status = line.substring(commaPos4 + 1, commaPos5);
-    String synced = line.substring(commaPos5 + 1);
+    String studentId = line.substring(commaPos1 + 1, commaPos2);
+    String studentName = line.substring(commaPos2 + 1, commaPos3);
+    String status = line.substring(commaPos3 + 1, commaPos4);
+    String synced = line.substring(commaPos4 + 1);
 
     // Only include records that haven't been synced yet
     if (synced.toInt() == 0)
@@ -323,9 +269,8 @@ void syncToGoogle()
       }
 
       // Add this record to the JSON array
-      jsonPayload += "{\"date\":\"" + date + "\",\"time\":\"" + time +
-                     "\",\"student_id\":\"" + studentId + "\",\"student_name\":\"" +
-                     studentName + "\",\"status\":\"" + status + "\"}";
+      jsonPayload += "{\"date\":\"" + date + "\",\"student_id\":\"" + studentId +
+                     "\",\"student_name\":\"" + studentName + "\",\"status\":\"" + status + "\"}";
 
       hasUnsyncedRecords = true;
       recordCount++;
@@ -345,6 +290,7 @@ void syncToGoogle()
     printBoth("No unsynced records found. Nothing to upload.");
     file.close();
     tempFile.close();
+    disconnectWiFi();
     return;
   }
 
@@ -422,6 +368,9 @@ void syncToGoogle()
   {
     printBoth("Sync failed. Will try again later.");
   }
+
+  // Disconnect from WiFi after syncing
+  disconnectWiFi();
 }
 
 uint8_t getFingerprintEnroll(uint8_t id)
@@ -689,7 +638,7 @@ void viewStoredRecords()
   printBoth("--- End of Records ---\n");
 }
 
-// New function to clear attendance data
+// Function to clear attendance data
 void clearAttendanceData()
 {
   printBoth("Are you sure you want to clear all attendance records? (Y/N)");
@@ -713,7 +662,7 @@ void clearAttendanceData()
         if (file)
         {
           // Write CSV headers
-          file.println("date,time,student_id,student_name,status,synced");
+          file.println("date,student_id,student_name,status,synced");
           file.close();
 
           printBoth("All attendance records have been cleared successfully!");
@@ -765,9 +714,31 @@ void enrollMode()
   }
 }
 
+void setCurrentDate()
+{
+  printBoth("Enter today's date in YYYY-MM-DD format (e.g., 2025-05-19):");
+  String dateInput = readInput();
+
+  // Basic validation - check if the input matches the expected format
+  if (dateInput.length() == 10 &&
+      dateInput.charAt(4) == '-' &&
+      dateInput.charAt(7) == '-')
+  {
+    currentDate = dateInput;
+    printBoth("Date set to: " + currentDate);
+  }
+  else
+  {
+    printBoth("Invalid date format. Using default date: " + currentDate);
+  }
+}
+
 void attendanceMode()
 {
-  printBoth("Entering Attendance Mode...");
+  // First set the date for attendance
+  setCurrentDate();
+
+  printBoth("Entering Attendance Mode for date: " + currentDate);
   printBoth("Place Finger... (Press 'X' to exit)");
 
   while (true)
@@ -874,31 +845,6 @@ void setup()
   // Initialize SPIFFS
   initSPIFFS();
 
-  // Connect to WiFi
-  WiFi.begin(ssid, password);
-  printBoth("Connecting to " + String(ssid) + " ...");
-
-  int wifiCounter = 0;
-  while (WiFi.status() != WL_CONNECTED && wifiCounter < 20) // Timeout after 20 seconds
-  {
-    delay(1000);
-    printBoth(".");
-    wifiCounter++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    printBoth("\nConnection established!");
-    printBoth("IP address: " + WiFi.localIP().toString());
-
-    // Initialize and sync time
-    initTime();
-  }
-  else
-  {
-    printBoth("\nWiFi connection failed! Continuing in offline mode...");
-  }
-
   // Initialize fingerprint sensor
   printBoth("Initializing sensor...");
 
@@ -944,6 +890,7 @@ void showMainMenu()
   printBoth("4. View Stored Records");
   printBoth("5. Sync to Google Sheets");
   printBoth("6. Clear Attendance Data");
+  printBoth("7. Set Current Date");
   printBoth("==============================");
 }
 
@@ -985,9 +932,14 @@ void loop()
       clearAttendanceData();
       showMainMenu();
     }
+    else if (mode == "7")
+    {
+      setCurrentDate();
+      showMainMenu();
+    }
     else
     {
-      printBoth("Invalid choice. Please enter 1-6.");
+      printBoth("Invalid choice. Please enter 1-7.");
     }
   }
 }
